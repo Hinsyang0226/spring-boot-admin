@@ -1,5 +1,149 @@
-{
-  "extends": [
-    "config:base"
-  ]
+
+package cto.domain.purl.v2
+
+import cto.domain.purl.model.Checksum
+import cto.domain.purl.model.Purl
+import cto.domain.purl.model.PurlPartsV2
+import java.net.URI
+
+/**
+ * Abstract base class for PURL specifications, providing shared logic for generate and validate methods.
+ */
+abstract class BasePurlSpecV2 : PurlSpecV2 {
+
+    abstract override fun type(): String
+
+    override fun generate(nexusURL: String, rollback: String?, checksum: List<Checksum>): Purl {
+        val uri = URI(nexusURL)
+        val pathSegments = uri.path.split("/").filter { it.isNotEmpty() }
+        val artifactRepo = pathSegments[0]
+        val groupId = pathSegments.subList(2, pathSegments.size - 3).joinToString(separator = "/")
+        val artifactId = pathSegments[pathSegments.size - 3]
+        val version = pathSegments[pathSegments.size - 2]
+
+        val purl = "pkg:${type()}/$groupId/$artifactId@$version/rollback=$rollback&artifactInstance=${uri.host}&artifactRepo=$artifactRepo" +
+                checksum.map { it.type.name.lowercase() + ":" + it.value }.joinToString(separator = ",")
+
+        return Purl(purl)
+    }
+
+    override fun validate(purl: Purl): PurlPartsV2 {
+        val (pathParts, queryParams) = parsePurl(purl.purl, type())
+        val groupId = pathParts.subList(0, pathParts.size - 1).joinToString(separator = "/").replace(oldValue = ".", newValue = "/")
+        val artifactIdVersion = pathParts.last()
+        val artifactId = artifactIdVersion.substringBeforeLast(delimiter = "@")
+        val version = artifactIdVersion.substringAfterLast(delimiter = "@")
+
+        val missingParts = mutableListOf<String>()
+        val insensitiveQueryParams = queryParams.mapKeys { it.key.lowercase() }
+
+        if (groupId.isBlank()) missingParts.add("groupId")
+        if (artifactId.isBlank()) missingParts.add("artifactId")
+        if (version.isBlank()) missingParts.add("version")
+        if (insensitiveQueryParams["artifactinstance"].isNullOrBlank()) missingParts.add("artifactInstance")
+        if (insensitiveQueryParams["artifactrepo"].isNullOrBlank()) missingParts.add("artifactRepo")
+        val checksum = insensitiveQueryParams["checksum"]
+
+        if (checksum.isNullOrBlank()) missingParts.add("checksum")
+
+        if (missingParts.isNotEmpty()) {
+            throw InvalidPurlException("Invalid PURL: Missing required parts - ${missingParts.joinToString(separator = ", ")}")
+        }
+
+        val checksums = try {
+            checksum?.split(Regex("[, ]"))?.map {
+                val (type, value) = it.split(":").map { it.lowercase() }
+                Checksum(ChecksumType.valueOf(type.uppercase()), value)
+            }
+        } catch (e: IllegalArgumentException) {
+            throw InvalidPurlException("Invalid checksum type or value in PURL: $purl")
+        } catch (e: IllegalArgumentException) {
+            throw InvalidPurlException("Invalid checksum value in PURL: $purl")
+        }
+
+        val nexusURL = "https://${insensitiveQueryParams["artifactinstance"]}/${insensitiveQueryParams["artifactrepo"]}/$groupId/$artifactId/$version"
+        val rollback = insensitiveQueryParams["rollback"]
+
+        return PurlPartsV2(type = type(), nexusURL, rollback, checksums!!)
+    }
+}
+
+
+
+
+package cto.domain.purl.v2
+
+/**
+ * A specification for handling Maven PURLs.
+ */
+class Maven : BasePurlSpecV2() {
+
+    override fun type(): String = "mvn"
+}
+
+
+
+
+package cto.domain.purl.v2
+
+/**
+ * A specification for handling Raw PURLs.
+ */
+class Raw : BasePurlSpecV2() {
+
+    override fun type(): String = "raw"
+}
+
+
+
+
+package cto.domain.purl.v2
+
+import cto.domain.purl.model.Checksum
+import cto.domain.purl.model.ChecksumType
+import cto.domain.purl.model.Purl
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertThrows
+
+class RawTest {
+
+    @Test
+    fun `should validate a correct raw purl`() {
+        val raw = Raw()
+        val purl = Purl("pkg:raw/com.hbsc.mast.kvm/crowd@updates-424flbc/rollback=main-05c0de46&artifactInstance=nexus302.systems.uk.hbsc&artifactRepo=raw-release&checksum=sha1:1d6d0f8b077379027afed1940e148f5b8c23137979d";)
+
+        val result = raw.validate(purl)
+
+        // Validate the type
+        assertEquals(expected = "raw", result.type)
+
+        // Validate the artifact URL
+        assertEquals(
+            expected = "https://nexus302.systems.uk.hbsc/raw-release/com/hbsc/mast/kvm/crowd/updates-424flbc";,
+            result.artifactURL
+        )
+
+        // Validate the rollback URL
+        assertEquals(
+            expected = "main-05c0de46",
+            result.rollbackArtifactURL
+        )
+
+        // Validate the checksum
+        assertEquals(expected = 1, result.checksums.size)
+        val checksum = result.checksums.first()
+        assertEquals(ChecksumType.SHA1, checksum.type)
+        assertEquals(expected = "1d6d0f8b077379027afed1940e148f5b8c23137979d", checksum.value)
+    }
+
+    @Test
+    fun `should throw exception for missing checksum`() {
+        val raw = Raw()
+        val purl = Purl("pkg:raw/com.hbsc.mast.kvm/crowd@updates-424flbc/rollback=main-05c0de46&artifactInstance=nexus302.systems.uk.hbsc&artifactRepo=raw-release";)
+
+        assertThrows<InvalidPurlException> {
+            raw.validate(purl)
+        }
+    }
 }
