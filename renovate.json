@@ -1,3 +1,90 @@
+package cto.domain.purl.v2
+
+import cto.domain.purl.model.Checksum
+import cto.domain.purl.model.Purl
+import cto.domain.purl.model.PurlPartsV2
+
+/**
+ * A specification for handling Raw PURLs, delegating to Maven while overriding the type.
+ */
+class Raw : PurlSpecV2 {
+    // Inner wrapper class to override the type method
+    private class MavenTypeOverride : PurlSpecV2 by Maven() {
+        override fun type(): String = "raw"
+    }
+
+    private val delegate = MavenTypeOverride()
+
+    override fun type(): String = delegate.type()
+
+    override fun generate(nexusURL: String, rollback: String?, checksum: List<Checksum>): Purl {
+        return delegate.generate(nexusURL, rollback, checksum)
+    }
+
+    override fun validate(purl: Purl): PurlPartsV2 {
+        return delegate.validate(purl)
+    }
+}
+
+
+package cto.domain.purl.v2
+
+import cto.domain.purl.model.Checksum
+import cto.domain.purl.model.ChecksumType
+import cto.domain.purl.model.Purl
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertThrows
+
+class RawTest {
+
+    @Test
+    fun `should validate a correct raw purl`() {
+        val raw = Raw()
+        val purl = Purl("pkg:raw/com.hbsc.mast.kvm/crowd@updates-424flbc/rollback=main-05c0de46&artifactInstance=nexus302.systems.uk.hbsc&artifactRepo=raw-release&checksum=sha1:1d6d0f8b077379027afed1940e148f5b8c23137979d")
+
+        val result = raw.validate(purl)
+
+        // Validate the type
+        assertEquals(expected = "raw", result.type)
+
+        // Validate the artifact URL
+        assertEquals(
+            expected = "https://nexus302.systems.uk.hbsc/raw-release/com/hbsc/mast/kvm/crowd/updates-424flbc",
+            result.artifactURL
+        )
+
+        // Validate the rollback URL
+        assertEquals(
+            expected = "main-05c0de46",
+            result.rollbackArtifactURL
+        )
+
+        // Validate the checksum
+        assertEquals(expected = 1, result.checksums.size)
+        val checksum = result.checksums.first()
+        assertEquals(ChecksumType.SHA1, checksum.type)
+        assertEquals(expected = "1d6d0f8b077379027afed1940e148f5b8c23137979d", checksum.value)
+    }
+
+    @Test
+    fun `should throw exception for missing checksum`() {
+        val raw = Raw()
+        val purl = Purl("pkg:raw/com.hbsc.mast.kvm/crowd@updates-424flbc/rollback=main-05c0de46&artifactInstance=nexus302.systems.uk.hbsc&artifactRepo=raw-release")
+
+        assertThrows<InvalidPurlException> {
+            raw.validate(purl)
+        }
+    }
+}
+
+
+
+
+
+
+
+
 
 package cto.domain.purl.v2
 
